@@ -9,7 +9,6 @@ type AppState =
   | { status: "success"; recipe: Recipe }
   | { status: "error"; message: string };
 
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const LOADING_MESSAGES = [
   "Analizando ingredientes...",
   "Pensando una receta...",
@@ -40,29 +39,62 @@ function Spinner() {
   );
 }
 
-function readFileAsBase64(file: File): Promise<string> {
+async function compressImage(
+  file: File,
+  maxDimension = 1568,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
-    reader.onload = () => {
-      const result = reader.result;
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result;
 
-      if (typeof result !== "string") {
-        reject(new Error("No se pudo leer la imagen."));
+      if (typeof dataUrl !== "string") {
+        reject(new Error("No se pudo leer el archivo"));
         return;
       }
 
-      const commaIndex = result.indexOf(",");
-      const base64 =
-        commaIndex >= 0 ? result.slice(commaIndex + 1) : result;
+      const img = new Image();
 
-      resolve(base64);
+      img.onload = () => {
+        let { width, height } = img;
+
+        if (width > height && width > maxDimension) {
+          height = (height * maxDimension) / width;
+          width = maxDimension;
+        } else if (height > maxDimension) {
+          width = (width * maxDimension) / height;
+          height = maxDimension;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+
+        if (!ctx) {
+          reject(new Error("No se pudo procesar la imagen"));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const base64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+
+        if (!base64) {
+          reject(new Error("No se pudo procesar la imagen"));
+          return;
+        }
+
+        resolve(base64);
+      };
+
+      img.onerror = () => reject(new Error("No se pudo cargar la imagen"));
+      img.src = dataUrl;
     };
 
-    reader.onerror = () => {
-      reject(new Error("No se pudo leer la imagen."));
-    };
-
+    reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
     reader.readAsDataURL(file);
   });
 }
@@ -80,6 +112,14 @@ function isRecipe(value: unknown): value is Recipe {
     Array.isArray(candidate.steps) &&
     candidate.steps.every((step) => typeof step === "string")
   );
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Ocurrió un error inesperado. Intenta de nuevo.";
 }
 
 export default function HomePage() {
@@ -127,18 +167,10 @@ export default function HomePage() {
         return;
       }
 
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        setAppState({
-          status: "error",
-          message: "La imagen es demasiado grande. Usa una de menos de 5 MB.",
-        });
-        return;
-      }
-
       setAppState({ status: "loading" });
 
       try {
-        const base64 = await readFileAsBase64(file);
+        const base64 = await compressImage(file);
 
         const response = await fetch("/api/recipe", {
           method: "POST",
@@ -170,11 +202,18 @@ export default function HomePage() {
         }
 
         setAppState({ status: "success", recipe: data });
-      } catch {
+      } catch (error) {
+        const message = getErrorMessage(error);
+        const isProcessingError =
+          message.includes("procesar") ||
+          message.includes("cargar") ||
+          message.includes("leer");
+
         setAppState({
           status: "error",
-          message:
-            "No hay conexión o el servidor no respondió. Revisa tu red e intenta de nuevo.",
+          message: isProcessingError
+            ? "No pude preparar la foto. Intenta con otra imagen."
+            : "No hay conexión o el servidor no respondió. Revisa tu red e intenta de nuevo.",
         });
       }
     },

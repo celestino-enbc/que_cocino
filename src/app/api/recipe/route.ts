@@ -38,14 +38,25 @@ function isRecipe(value: unknown): value is Recipe {
   );
 }
 
+function normalizeBase64Image(image: string): string {
+  const trimmed = image.trim();
+
+  if (trimmed.startsWith("data:")) {
+    const commaIndex = trimmed.indexOf(",");
+    return commaIndex >= 0 ? trimmed.slice(commaIndex + 1) : trimmed;
+  }
+
+  return trimmed;
+}
+
 function getEnvOrError(): { apiKey: string; apiUrl: string; model: string } | NextResponse {
-  const apiKey = process.env.IA_API_KEY;
-  const apiUrl = process.env.IA_API_URL;
-  const model = process.env.IA_MODEL;
+  const apiKey = process.env.IA_API_KEY?.trim();
+  const apiUrl = process.env.IA_API_URL?.trim();
+  const model = process.env.IA_MODEL?.trim();
 
   if (!apiKey || !apiUrl || !model) {
     return NextResponse.json(
-      { error: "Configuración del servidor incompleta." },
+      { error: "Configuración del servidor incompleta" },
       { status: 500 },
     );
   }
@@ -72,7 +83,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Imagen requerida." }, { status: 400 });
   }
 
-  const { image } = body as { image: string };
+  const { image: rawImage } = body as { image: string };
   const env = getEnvOrError();
 
   if (env instanceof NextResponse) {
@@ -80,9 +91,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const { apiKey, apiUrl, model } = env;
-  const dataUrl = image.startsWith("data:")
-    ? image
-    : `data:image/jpeg;base64,${image}`;
+  const image = normalizeBase64Image(rawImage);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -101,13 +110,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           {
             role: "user",
             content: [
-              {
-                type: "text",
-                text: "Analiza esta foto de ingredientes y sugiere una receta.",
-              },
+              { type: "text", text: "Analiza esta foto de ingredientes." },
               {
                 type: "image_url",
-                image_url: { url: dataUrl },
+                image_url: {
+                  url: `data:image/jpeg;base64,${image}`,
+                  detail: "low",
+                },
               },
             ],
           },
